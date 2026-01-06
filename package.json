@@ -1,0 +1,9 @@
+{
+  "name": "tratamento-de-dados",
+  "version": "1.0.0",
+  "description": "Sistema de Upload de Relatórios",
+  "scripts": {},
+  "dependencies": {
+    "@vercel/speed-insights": "^1.0.0"
+  }
+}
