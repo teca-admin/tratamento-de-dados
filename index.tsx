@@ -24,13 +24,16 @@ let processedFile: { url: string; blob: Blob; fileName: string } | null = null;
 let objectUrl: string | null = null;
 let selectedReportType = 'recebido';
 
+// Host unificado para o novo servidor
+const BASE_HOST = 'https://teca-admin-n8n.ly7t0m.easypanel.host';
+
 const URLs: Record<string, string> = {
-  recebido: 'https://teca-admin-n8n.ly7t0m.easypanel.host/webhook/processar-8-arquivos',
-  entrega: 'https://teca-admin-n8n.ly7t0m.easypanel.host/webhook/processar-8-arquivos',
-  carga: 'https://teca-admin-n8n.ly7t0m.easypanel.host/webhook/processar-8-arquivos',
-  exportacao: 'https://teca-admin-n8n.ly7t0m.easypanel.host/webhook/processar-8-arquivos',
-  'exportacao-entrega': 'https://teca-admin-n8n.ly7t0m.easypanel.host/webhook/processar-8-arquivos',
-  liberacao: 'https://teca-admin-n8n.ly7t0m.easypanel.host/webhook/liberação'
+  recebido: `${BASE_HOST}/webhook/processar-8-arquivos`,
+  entrega: `${BASE_HOST}/webhook/processar-8-arquivos`,
+  carga: `${BASE_HOST}/webhook/processar-8-arquivos`,
+  exportacao: `${BASE_HOST}/webhook/processar-8-arquivos`,
+  'exportacao-entrega': `${BASE_HOST}/webhook/processar-8-arquivos`,
+  liberacao: `${BASE_HOST}/webhook/liberação`
 };
 
 // Type selection
@@ -151,8 +154,8 @@ function formatBytes(bytes: number) {
 
 async function startProcessing() {
   showProcessing();
-  if (processingTitle) processingTitle.textContent = 'Enviando arquivos para processamento';
-  if (processingSubtitle) processingSubtitle.textContent = 'Aguarde — enviando os arquivos para o serviço.';
+  if (processingTitle) processingTitle.textContent = 'Enviando para processamento';
+  if (processingSubtitle) processingSubtitle.textContent = 'Aguarde — isso pode levar alguns segundos dependendo do volume de dados.';
 
   const fd = new FormData();
   selectedFiles.forEach((f, i) => fd.append(`file${i + 1}`, f));
@@ -161,18 +164,38 @@ async function startProcessing() {
   const webhookURL = URLs[selectedReportType];
 
   try {
-    const resp = await fetch(webhookURL, { method: 'POST', body: fd });
+    // Definimos explicitamente que queremos CORS
+    const resp = await fetch(webhookURL, { 
+      method: 'POST', 
+      body: fd,
+      mode: 'cors'
+    });
 
     if (!resp.ok) {
-      const text = await resp.text().catch(() => '');
-      throw new Error(text || `Resposta do servidor: ${resp.status}`);
+      // Tentamos ler o erro do n8n (que pode vir como JSON)
+      const errorText = await resp.text();
+      let errorMessage = `Erro do Servidor (${resp.status})`;
+      
+      try {
+        const errorJson = JSON.parse(errorText);
+        if (errorJson.errorMessage) {
+          errorMessage = `Erro no n8n: ${errorJson.errorMessage}`;
+          if (errorJson.errorMessage.includes('credentials')) {
+            errorMessage += '\n\n(Dica: Verifique as credenciais do Google Sheets no fluxo do n8n)';
+          }
+        }
+      } catch (e) {
+        errorMessage = errorText || errorMessage;
+      }
+      
+      throw new Error(errorMessage);
     }
 
     const blob = await resp.blob();
     const url = URL.createObjectURL(blob);
     objectUrl = url;
 
-    const fileName = 'arquivo_processado.xlsx';
+    const fileName = `processado_${selectedReportType}_${new Date().getTime()}.xlsx`;
 
     processedFile = {
       url,
@@ -181,15 +204,28 @@ async function startProcessing() {
     };
 
     if (processingTitle) processingTitle.textContent = 'Concluído';
-    if (processingSubtitle) processingSubtitle.textContent = 'Arquivo recebido com sucesso.';
+    if (processingSubtitle) processingSubtitle.textContent = 'Arquivo processado com sucesso!';
     setTimeout(() => showResults(), 450);
 
   } catch (err: any) {
-    console.error('Erro no envio/recebimento:', err);
-    if (processingTitle) processingTitle.textContent = 'Erro';
-    if (processingSubtitle) processingSubtitle.textContent = 'Ocorreu um erro no processamento.';
-    alert('Erro ao processar: ' + (err.message || err));
-    showUpload();
+    console.error('Erro detalhado:', err);
+    if (processingTitle) processingTitle.textContent = 'Falha no Processamento';
+    
+    let userMessage = err.message;
+    if (userMessage.includes('Failed to fetch')) {
+      userMessage = 'Erro de Conexão ou CORS. Certifique-se que o n8n permite requisições de tratamento-de-dados.vercel.app.';
+    }
+
+    if (processingSubtitle) processingSubtitle.textContent = userMessage;
+    alert('Erro: ' + userMessage);
+    
+    // Mostra botão para tentar novamente
+    const retryBtn = document.createElement('button');
+    retryBtn.className = 'btn ghost';
+    retryBtn.style.marginTop = '20px';
+    retryBtn.textContent = 'Voltar e Tentar Novamente';
+    retryBtn.onclick = () => showUpload();
+    processingScreen.appendChild(retryBtn);
   }
 }
 
@@ -198,6 +234,10 @@ function showTypeSelection() {
   if (uploadScreen) uploadScreen.style.display = 'none';
   if (processingScreen) processingScreen.style.display = 'none';
   if (resultsScreen) resultsScreen.style.display = 'none';
+  
+  // Limpa botões de erro extras se existirem
+  const extraBtns = processingScreen.querySelectorAll('.btn.ghost');
+  extraBtns.forEach(b => b.remove());
 }
 
 function showUpload() {
@@ -205,6 +245,9 @@ function showUpload() {
   if (uploadScreen) uploadScreen.style.display = 'block';
   if (processingScreen) processingScreen.style.display = 'none';
   if (resultsScreen) resultsScreen.style.display = 'none';
+  
+  const extraBtns = processingScreen.querySelectorAll('.btn.ghost');
+  extraBtns.forEach(b => b.remove());
 }
 
 function showProcessing() {
@@ -228,12 +271,12 @@ function renderResults() {
 
   if (!processedFile) {
     if (resultsTitle) resultsTitle.textContent = 'Nenhum arquivo retornado';
-    if (resultsSubtitle) resultsSubtitle.textContent = 'Não foram encontrados arquivos após o processamento.';
+    if (resultsSubtitle) resultsSubtitle.textContent = 'O processamento não gerou um arquivo válido.';
     return;
   }
 
-  if (resultsTitle) resultsTitle.textContent = 'Processamento concluído';
-  if (resultsSubtitle) resultsSubtitle.textContent = 'Arquivo disponível para download';
+  if (resultsTitle) resultsTitle.textContent = 'Relatório Pronto';
+  if (resultsSubtitle) resultsSubtitle.textContent = 'Seu arquivo foi tratado e está pronto para download.';
 
   const item = document.createElement('div');
   item.className = 'result-item';
@@ -268,7 +311,7 @@ function renderResults() {
   const dlBtn = document.createElement('button');
   dlBtn.className = 'btn primary';
   dlBtn.type = 'button';
-  dlBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="color:currentColor"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg><span class="btn-label">Download</span>';
+  dlBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="color:currentColor"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg><span class="btn-label">Baixar Planilha</span>';
   dlBtn.addEventListener('click', () => {
     if (processedFile) {
       const a = document.createElement('a');
